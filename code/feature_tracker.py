@@ -7,7 +7,7 @@ class FeatureTracker:
     def __init__(self):
         # can be orb, sift, etc.
         self.tracker = cv2.ORB_create()
-        self.bf = cv2.BFMatcher(cv2.NORM_HAMMING)
+        self.bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
         
     def detect(self, img):
         # returns keypoints and descriptions
@@ -19,26 +19,18 @@ class FeatureTracker:
         
         if des1 is None or des2 is None:
             return []
-        
-        matches = self.bf.knnMatch(des1, des2, k=2)
- 
-        # apply ratio test to only get good matches
-        good_matches = []
-        for m, n in matches:
-            if m.distance < 0.75*n.distance:
-                good_matches.append([m])
-                
-        return good_matches
+
+        matches = self.bf.match(des1, des2)
+        matches = sorted(matches, key=lambda x: x.distance)
+        return matches
     
     def point_correspondences(self, kp1, kp2, matches):
         # homogenous w value is set to 1
         pts1 = np.ones((3, len(matches)))
         pts2 = np.ones((3, len(matches)))
         for i, match in enumerate(matches):
-            m = match[0]
-            
-            x1 = kp1[m.queryIdx].pt
-            x2 = kp2[m.trainIdx].pt
+            x1 = kp1[match.queryIdx].pt
+            x2 = kp2[match.trainIdx].pt
             
             pts1[:2, i] = x1
             pts2[:2, i] = x2

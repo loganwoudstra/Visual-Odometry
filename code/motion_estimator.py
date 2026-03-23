@@ -29,7 +29,7 @@ class MotionEstimator:
         return T
     
     def eight_point(self, pts1, pts2):
-        N = pts1.shape[0]
+        N = pts1.shape[1]
         A = np.zeros((N, 9))
         for i in range(N):
             # homogenous to euclidean
@@ -59,12 +59,12 @@ class MotionEstimator:
         F = T2.T @ F @ T1 
         return F
     
-    def eight_point_ransac(self, pts1, pts2, tol=1.5, max_iterations=1000, min_inliers=0.90):
+    def eight_point_ransac(self, pts1, pts2, tol=1.0, max_iterations=1000, min_inliers=0.75):
         # normalize
-        T1 = self.normalize(pts1)
-        T2 = self.normalize(pts2)
-        normalized_pts1 = T1 @ pts1
-        normalized_pts2 = T2 @ pts2
+        # T1 = self.normalize(pts1)
+        # T2 = self.normalize(pts2)
+        # normalized_pts1 = T1 @ pts1
+        # normalized_pts2 = T2 @ pts2
         N = pts1.shape[1]
         
         # compute F
@@ -72,13 +72,27 @@ class MotionEstimator:
         best_inliers_mask = None
         for i in range(max_iterations):
             sample_ids = np.random.choice(N, 8, replace=False)
-            pts1_sample = normalized_pts1[:, sample_ids]
-            pts2_sample = normalized_pts2[:, sample_ids]
-            F = self.eight_point(pts1_sample, pts2_sample)
+            pts1_sample = pts1[:, sample_ids]
+            pts2_sample = pts2[:, sample_ids]
+
+            T1 = self.normalize(pts1_sample)
+            T2 = self.normalize(pts2_sample)
+            pts1_norm = T1 @ pts1_sample
+            pts2_norm = T2 @ pts2_sample
+
+            F_norm = self.eight_point(pts1_norm, pts2_norm)
+            F = T2.T @ F_norm @ T1 # unnormalize
             
-            # epipoalr constraint x'Fx = 0
-            constraint_vals = np.sum(normalized_pts2 * (F @ normalized_pts1), axis=0)
-            inliers_mask  = np.abs(constraint_vals) < tol
+            # sampson error for outlier rejection (distance from epipolar line)
+            Fx1 = F @ pts1
+            Ftx2 = F.T @ pts2
+
+            numerator = np.sum(pts2 * Fx1, axis=0) ** 2
+            denominator = Fx1[0]**2 + Fx1[1]**2 + Ftx2[0]**2 + Ftx2[1]**2
+            denominator = np.maximum(denominator, 1e-8)
+
+            error = numerator / denominator
+            inliers_mask = error < tol
             n_inliers = inliers_mask.sum()
             
             if n_inliers > max_inliers:
@@ -87,15 +101,19 @@ class MotionEstimator:
                 
             if n_inliers / N >= min_inliers:
                 break
-        # print(i)
+        print(i)
             
         # recompute using all inliers
         inlier_pts1 = pts1[:, best_inliers_mask]
         inlier_pts2 = pts2[:, best_inliers_mask]
-        F = self.eight_point(inlier_pts1, inlier_pts2)
+        T1 = self.normalize(inlier_pts1)
+        T2 = self.normalize(inlier_pts2)
+        pts1_norm = T1 @ inlier_pts1
+        pts2_norm = T2 @ inlier_pts2
         
-        # unnormalize
-        F = T2.T @ F @ T1 
+        F = self.eight_point(pts1_norm, pts2_norm)
+        F = T2.T @ F @ T1
+        
         return F, best_inliers_mask
     
     def compute_E(self, F):
@@ -131,6 +149,9 @@ class MotionEstimator:
         U, S, V_t = np.linalg.svd(E)
         assert np.allclose(S, [1., 1., 0.,]), "Essential matrix does not have singular values (1, 1, 0)"
         
+        if np.linalg.det(U @ V_t) < 0: # bc rotation matrices must have det = +1
+            V_t = -V_t
+        
         W = np.array([
             [0., -1., 0.],
             [1., 0., 0.],
@@ -140,11 +161,8 @@ class MotionEstimator:
         # get 4 candidtae solutions
         R1 = U @ W @ V_t
         R2 = U @ W.T @ V_t
-        if np.linalg.det(R1) < 0: # makes sure rotation matrices have pos determinants
-            R1 = -R1
-        if np.linalg.det(R2) < 0:
-            R2 = -R2
         t = U[:, -1]
+        t = t / np.linalg.norm(t)
         candidates = [
             (R1, t),
             (R1, -t),
@@ -169,6 +187,7 @@ class MotionEstimator:
             if inlier_count > max_inliers:
                 R_best = R
                 t_best = t
+                max_inliers = inlier_count
         
         # covnert R, t into homogenous matrix
         pose = np.eye(4)
@@ -187,6 +206,11 @@ class MotionEstimator:
             F = self.normalized_eight_point(pts1, pts2)
         E = self.compute_E(F)
         pose = self.pose_from_E(E, pts1, pts2)
+        
+        # # opencv
+        # E, mask = cv2.findEssentialMat(pts1[:2].T, pts2[:2].T, self.K, cv2.RANSAC)
+        # mask = mask.ravel().astype(bool)
+        # pose = self.pose_from_E(E, pts1[:, mask], pts2[:, mask])
         
         return pose
     
