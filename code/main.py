@@ -1,6 +1,6 @@
 from dataset import Dataset
 from feature_tracker import FeatureTracker
-from motion_estimator import MotionEstimator
+from motion_estimation import EightPointEstimator
 import argparse
 import cv2
 import numpy as np
@@ -9,9 +9,7 @@ import matplotlib.pyplot as plt
 def main(sequence):
     dataset = Dataset(sequence)
     tracker = FeatureTracker()
-    
-    # K = dataset.
-    motion_estimator = MotionEstimator(dataset.K)
+    motion_estimator = EightPointEstimator(dataset.K)
     
     images = iter(dataset.gray)
     img_prev = next(images)
