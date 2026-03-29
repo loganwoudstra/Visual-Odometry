@@ -13,10 +13,7 @@ class FeatureTracker:
         # returns keypoints and descriptions
         return self.tracker.detectAndCompute(img, None)
     
-    def match(self, kp_des1, kp_des2):
-        kp1, des1 = kp_des1
-        kp2, des2 = kp_des2
-        
+    def match(self, des1, des2):
         if des1 is None or des2 is None:
             return []
 
@@ -24,18 +21,23 @@ class FeatureTracker:
         matches = sorted(matches, key=lambda x: x.distance)
         return matches
     
-    def point_correspondences(self, kp1, kp2, matches):
-        # homogenous w value is set to 1
+    def point_correspondences(self, kp_des1, kp_des2, matches):
+        kp1, des1 = kp_des1
+        kp2, _ = kp_des2
+        
+        # sue ones for pts so that homogenous w value is set to 1
         pts1 = np.ones((3, len(matches)))
         pts2 = np.ones((3, len(matches)))
+        des = np.zeros((len(matches), des1.shape[1]), dtype=des1.dtype)
         for i, match in enumerate(matches):
             x1 = kp1[match.queryIdx].pt
             x2 = kp2[match.trainIdx].pt
             
+            des[i] = des1[match.queryIdx]
             pts1[:2, i] = x1
             pts2[:2, i] = x2
 
-        return pts1, pts2
+        return pts1, pts2, des
             
 if __name__ == '__main__':
     dataset = Dataset('00')
@@ -47,8 +49,8 @@ if __name__ == '__main__':
     
     for i, img in enumerate(images):
         kp_des = tracker.detect(img)
-        matches = tracker.match(kp_des_prev, kp_des)
-        pts1, pts2 = tracker.point_correspondences(kp_des[0], kp_des_prev[0], matches)
+        matches = tracker.match(kp_des_prev[1], kp_des[1])
+        pts1, pts2 = tracker.point_correspondences(kp_des_prev[0], kp_des[0], matches)
         
         # feature_match_img = cv2.drawMatchesKnn(img_prev, kp_des_prev[0], img, kp_des[0], matches,None,flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS)
         # plt.imshow(feature_match_img)

@@ -6,31 +6,35 @@ import cv2
 class MotionEstimator:
     def __init__(self, K):
         self.K = K
+        self.tracker = FeatureTracker()
+        self.returns_global = False
     
     def normalize(self, pts):
-        # go from homogenous to euclidean
-        x = pts[0, :] / pts[2, :]
-        y = pts[1, :] / pts[2, :]
-        
-        # (0, 0) mean
-        mean_x = x.mean()
-        mean_y = y.mean()
-        
-        # root 2 avg dist
-        avg_dist = np.sqrt((x - mean_x)**2 + (y - mean_y)**2).mean()
-        scale = np.sqrt(2) / avg_dist
-        
-        T = np.array([
-            [scale, 0., -scale * mean_x],
-            [0., scale, -scale * mean_y],
-            [0., 0., 1.]
-        ])
-        
+        """normalizes 2d homogenous or 3d homogenous"""
+        D = pts.shape[0] - 1  # dimension
+
+        # homo to euclidean
+        X = pts[:D, :] / pts[D, :]
+
+        # 0 center
+        mean = X.mean(axis=1)
+        X_centered = X - mean[:, None]
+
+        # root(D) avg dist
+        dists = np.linalg.norm(X_centered, axis=0)
+        avg_dist = dists.mean()
+        scale = np.sqrt(D) / avg_dist
+
+        # Build matrix
+        T = np.eye(D + 1)
+        T[:D, :D] *= scale
+        T[:D, D] = -scale * mean
+
         return T
-    
-    def triangulate_points(self, P1, P2, pts1, pts2):
+        
+    def triangulate_points(self, P1, P2, pts1, pts2, return_type='homo'):
         N = pts1.shape[1]
-        pts_3d = np.zeros((3, N))
+        pts_3d = np.zeros((4, N))
         for i in range(N):
             x1, y1 = pts1[:2, i] / pts1[2, i]
             x2, y2 = pts2[:2, i] / pts2[2, i]
@@ -42,13 +46,37 @@ class MotionEstimator:
             ])
             _, _, V_t = np.linalg.svd(A)
             X = V_t[-1]
-            X = X / X[3] # homo to euclidean
-            pts_3d[:, i] = X[:3]
+            X = X / X[3] # normalize to have w=1
+            pts_3d[:, i] = X
+            
+        if return_type == 'euc':
+            pts_3d = pts_3d[:3]
         return pts_3d
+        
+    def estimate(self, img):
+        raise NotImplementedError("Estimate function not implemented for base class")
     
+class EssentialMatrixEstimator(MotionEstimator):
+    def __init__(self, K):
+        super().__init__(K)
+        self.prev_kp_des = None
+        self.kp_des = None
+        self.returns_global = False
+        
+    def match_features(self, img):
+        self.prev_kp_des = self.kp_des
+        self.kp_des = self.tracker.detect(img)
+        if self.prev_kp_des == None: # first frame
+            self.prev_kp_des = self.kp_des
+            return None, None, None
+        matches = self.tracker.match(self.prev_kp_des[1], self.kp_des[1])
+        pts1, pts2, des = self.tracker.point_correspondences(self.prev_kp_des, self.kp_des, matches)
+        
+        return pts1, pts2, des
+        
     def pose_from_E(self, E, pts1, pts2):
         U, S, V_t = np.linalg.svd(E)
-        assert np.allclose(S, [1., 1., 0.,]), "Essential matrix does not have singular values (1, 1, 0)"
+        assert (np.abs(S[0] - S[1]) < 1e-6) and (np.abs(S[2]) < 1e-6), f"Singular values not of the form (a, a, 0): {S}"
         
         if np.linalg.det(U @ V_t) < 0: # bc rotation matrices must have det = +1
             V_t = -V_t
@@ -77,9 +105,9 @@ class MotionEstimator:
         max_inliers = -1
         for R, t in candidates:
             P2 = self.K @ np.hstack([R, t.reshape(3,1)])
-            pts_3d = self.triangulate_points(P1, P2, pts1, pts2)
+            pts_euc = self.triangulate_points(P1, P2, pts1, pts2, return_type='euc')
             inlier_count = 0
-            for pt in pts_3d.T:
+            for pt in pts_euc.T:
                 cam1_depth = pt[2]
                 cam2_pt = R @ pt[:3] + t
                 cam2_depth = cam2_pt[2]
@@ -95,17 +123,16 @@ class MotionEstimator:
         pose[:3, :3] = R_best
         pose[:3, 3] = t_best
         
-        return pose
-        
-    def estimate(self, pts1, pts2):
-        raise NotImplementedError("Estimate function not implemented for base class")
+        return np.linalg.inv(pose)
     
-class OpenCVEstimator(MotionEstimator):
+class OpenCVEstimator(EssentialMatrixEstimator):
     def __init__(self, K):
         super().__init__(K)
         
-    def estimate(self, pts1, pts2):
-        assert pts1.shape == pts2.shape, "pts1 and pts2 of different shapes"
+    def estimate(self, img):
+        pts1, pts2, _ = self.match_features(img)
+        if pts1 is None or pts2 is None: # first frame
+            return np.eye(4)
         
         E, mask = cv2.findEssentialMat(pts1[:2].T, pts2[:2].T, self.K, cv2.RANSAC)
         mask = mask.ravel().astype(bool)
@@ -126,17 +153,10 @@ if __name__ == '__main__':
     kp_des_prev = tracker.detect(img_prev)
     
     for i, img in enumerate(images):
-        kp_des = tracker.detect(img)
-        matches = tracker.match(kp_des_prev, kp_des)
-        pts1, pts2 = tracker.point_correspondences(kp_des[0], kp_des_prev[0], matches)
-        
-        pose = motion_estimator.estimate(pts1, pts2)
+        pose = motion_estimator.estimate(img)
         # print(dataset.poses[i + 1])
         # print(pose)
         # print()
-
-        img_prev = img
-        kp_des_prev = kp_des
         
         # if i % 50 == 0:
         #     print(i)

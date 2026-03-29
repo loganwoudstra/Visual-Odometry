@@ -1,9 +1,9 @@
 from dataset import Dataset
 from feature_tracker import FeatureTracker
 import numpy as np
-from motion_estimation import MotionEstimator
+from motion_estimation import EssentialMatrixEstimator
     
-class EightPointEstimator(MotionEstimator):
+class EightPointEstimator(EssentialMatrixEstimator):
     def __init__(self, K):
         super().__init__(K)
         
@@ -34,6 +34,18 @@ class EightPointEstimator(MotionEstimator):
         F = T2.T @ F @ T1 
         return F
     
+    def sampson_error(self, pts1, pts2, F):
+        # sampson error for outlier rejection (distance from epipolar line)
+        Fx1 = F @ pts1
+        Ftx2 = F.T @ pts2
+
+        numerator = np.sum(pts2 * Fx1, axis=0) ** 2
+        denominator = Fx1[0]**2 + Fx1[1]**2 + Ftx2[0]**2 + Ftx2[1]**2
+        denominator = np.maximum(denominator, 1e-8)
+
+        error = numerator / denominator
+        return error
+    
     def eight_point_ransac(self, pts1, pts2, tol=1.0, max_iterations=1000, min_inliers=0.75):
         N = pts1.shape[1]
         
@@ -47,15 +59,7 @@ class EightPointEstimator(MotionEstimator):
 
             F = self.eight_point(pts1_sample, pts2_sample)
             
-            # sampson error for outlier rejection (distance from epipolar line)
-            Fx1 = F @ pts1
-            Ftx2 = F.T @ pts2
-
-            numerator = np.sum(pts2 * Fx1, axis=0) ** 2
-            denominator = Fx1[0]**2 + Fx1[1]**2 + Ftx2[0]**2 + Ftx2[1]**2
-            denominator = np.maximum(denominator, 1e-8)
-
-            error = numerator / denominator
+            error = self.sampson_error(pts1, pts2, F)
             inliers_mask = error < tol
             n_inliers = inliers_mask.sum()
             
@@ -85,8 +89,10 @@ class EightPointEstimator(MotionEstimator):
         E = U @ np.diag((1, 1, 0)) @ V_t
         return E
         
-    def estimate(self, pts1, pts2, ransac=True):
-        assert pts1.shape == pts2.shape, "pts1 and pts2 of different shapes"
+    def estimate(self, img, ransac=True, return_pts_des=False):
+        pts1, pts2, des = self.match_features(img)
+        if pts1 is None or pts2 is None: # first frame
+            return np.eye(4)
         
         if ransac:
             F, inlier_mask = self.eight_point_ransac(pts1, pts2)
@@ -97,7 +103,10 @@ class EightPointEstimator(MotionEstimator):
         E = self.compute_E(F)
         pose = self.pose_from_E(E, pts1, pts2)
         
-        return pose
+        if return_pts_des:
+            return pose, pts1, pts2, des
+        else:
+            return pose
     
     
 if __name__ == '__main__':
@@ -108,21 +117,12 @@ if __name__ == '__main__':
     motion_estimator = EightPointEstimator(dataset.K)
     
     images = iter(dataset.gray)
-    img_prev = next(images)
-    kp_des_prev = tracker.detect(img_prev)
     
     for i, img in enumerate(images):
-        kp_des = tracker.detect(img)
-        matches = tracker.match(kp_des_prev, kp_des)
-        pts1, pts2 = tracker.point_correspondences(kp_des[0], kp_des_prev[0], matches)
-        
-        pose = motion_estimator.estimate(pts1, pts2)
+        pose = motion_estimator.estimate(img)
         # print(dataset.poses[i + 1])
         # print(pose)
         # print()
-
-        img_prev = img
-        kp_des_prev = kp_des
         
         # if i % 50 == 0:
         #     print(i)
