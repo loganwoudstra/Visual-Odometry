@@ -8,6 +8,12 @@ class FeatureTracker:
         # can be orb, sift, etc.
         self.tracker = cv2.ORB_create()
         self.bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
+        # self.bf = cv2.BFMatcher(cv2.NORM_HAMMING)
+        # self.tracker = cv2.SIFT_create()
+        # FLANN_INDEX_KDTREE = 1
+        # index_params = dict(algorithm=FLANN_INDEX_KDTREE, trees=5)
+        # search_params = dict(checks=50)
+        # self.matcher = cv2.FlannBasedMatcher(index_params, search_params)
         
     def detect(self, img):
         # returns keypoints and descriptions
@@ -20,20 +26,24 @@ class FeatureTracker:
         matches = self.bf.match(des1, des2)
         matches = sorted(matches, key=lambda x: x.distance)
         return matches
-    
-    def point_correspondences(self, kp_des1, kp_des2, matches):
-        kp1, des1 = kp_des1
-        kp2, _ = kp_des2
-        
+    # def match(self, des1, des2, ratio=0.75):
+    #     matches = self.bf.knnMatch(des1, des2, k=2)
+    #     good = []
+    #     for m, n in matches:
+    #         if m.distance < ratio * n.distance:
+    #             good.append(m)
+    #     return good
+
+    def point_correspondences(self, kp1, des1, kp2, des2, matches):
         # sue ones for pts so that homogenous w value is set to 1
         pts1 = np.ones((3, len(matches)))
         pts2 = np.ones((3, len(matches)))
-        des = np.zeros((len(matches), des1.shape[1]), dtype=des1.dtype)
+        des = np.zeros((len(matches), des2.shape[1]), dtype=des2.dtype)
         for i, match in enumerate(matches):
             x1 = kp1[match.queryIdx].pt
             x2 = kp2[match.trainIdx].pt
             
-            des[i] = des1[match.queryIdx]
+            des[i] = des2[match.trainIdx]
             pts1[:2, i] = x1
             pts2[:2, i] = x2
 

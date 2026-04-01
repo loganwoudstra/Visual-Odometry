@@ -15,6 +15,8 @@ def main(sequence, method):
         motion_estimator = OpenCVEstimator(dataset.K)
         
     images = iter(dataset.gray)
+    for _ in range(25):
+        next(images)
     
     global_pose = np.eye(4)
     # trajectory = []
@@ -36,6 +38,8 @@ def main(sequence, method):
         pose = motion_estimator.estimate(img)
         if motion_estimator.returns_global:
             global_pose = pose
+            print(pose[:3, 3])
+            print()
         else:
             global_pose = global_pose @ pose
 
@@ -55,9 +59,16 @@ def main(sequence, method):
         plt.draw()
         plt.pause(0.001)
         
-        cv2.imshow('cam0', img)
+        vis = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+        if motion_estimator.matches is not None:
+            for m in motion_estimator.matches:
+                pt = motion_estimator.prev_kp[m.queryIdx].pt
+                cv2.circle(vis, (int(pt[0]), int(pt[1])), 3, (0, 255, 0), -1)
+            
+        cv2.imshow('cam0', vis)
         if cv2.waitKey(1) & 0xFF == 27:
             break
+        # input('...')
         
     cv2.destroyAllWindows()
 

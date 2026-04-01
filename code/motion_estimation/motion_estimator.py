@@ -8,6 +8,11 @@ class MotionEstimator:
         self.K = K
         self.tracker = FeatureTracker()
         self.returns_global = False
+        self.kp = None
+        self.des = None
+        self.prev_kp =None
+        self.prev_des = None
+        self.matches = None
     
     def normalize(self, pts):
         """normalizes 2d homogenous or 3d homogenous"""
@@ -59,20 +64,18 @@ class MotionEstimator:
 class EssentialMatrixEstimator(MotionEstimator):
     def __init__(self, K):
         super().__init__(K)
-        self.prev_kp_des = None
-        self.kp_des = None
         self.returns_global = False
         
     def match_features(self, img):
-        self.prev_kp_des = self.kp_des
-        self.kp_des = self.tracker.detect(img)
-        if self.prev_kp_des == None: # first frame
-            self.prev_kp_des = self.kp_des
-            return None, None, None
-        matches = self.tracker.match(self.prev_kp_des[1], self.kp_des[1])
-        pts1, pts2, des = self.tracker.point_correspondences(self.prev_kp_des, self.kp_des, matches)
-        
-        return pts1, pts2, des
+        self.prev_kp = self.kp
+        self.prev_des = self.des
+        self.kp, self.des = self.tracker.detect(img)
+        if self.prev_kp is None or self.prev_des is None: # first frame
+            self.prev_kp = self.kp
+            self.prev_des = self.des
+            self.matches = None
+            return 
+        self.matches = self.tracker.match(self.prev_des, self.des)
         
     def pose_from_E(self, E, pts1, pts2):
         U, S, V_t = np.linalg.svd(E)
@@ -80,7 +83,7 @@ class EssentialMatrixEstimator(MotionEstimator):
         
         if np.linalg.det(U @ V_t) < 0: # bc rotation matrices must have det = +1
             V_t = -V_t
-        
+
         W = np.array([
             [0., -1., 0.],
             [1., 0., 0.],
@@ -123,16 +126,18 @@ class EssentialMatrixEstimator(MotionEstimator):
         pose[:3, :3] = R_best
         pose[:3, 3] = t_best
         
-        return np.linalg.inv(pose)
+        # return np.linalg.inv(pose)
+        return pose
     
 class OpenCVEstimator(EssentialMatrixEstimator):
     def __init__(self, K):
         super().__init__(K)
         
     def estimate(self, img):
-        pts1, pts2, _ = self.match_features(img)
-        if pts1 is None or pts2 is None: # first frame
+        self.match_features(img)
+        if self.matches is None: # first frame
             return np.eye(4)
+        pts1, pts2, des = self.tracker.point_correspondences(self.prev_kp, self.prev_des, self.kp, self.des, self.matches)
         
         E, mask = cv2.findEssentialMat(pts1[:2].T, pts2[:2].T, self.K, cv2.RANSAC)
         mask = mask.ravel().astype(bool)
