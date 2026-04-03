@@ -90,7 +90,7 @@ class EightPointEstimator(EssentialMatrixEstimator):
         return E
         
     def estimate(self, img, ransac=True, return_pts_des=False):
-        self.match_features(img)
+        self.matches = self.match_features(img)
         if self.matches is None: # first frame
             return np.eye(4)
         pts1, pts2, des = self.tracker.point_correspondences(self.prev_kp, self.prev_des, self.kp, self.des, self.matches)

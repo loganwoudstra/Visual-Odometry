@@ -13,6 +13,8 @@ def main(sequence, method):
         motion_estimator = DLTEstimator(dataset.K)
     elif method == 'opencv':
         motion_estimator = OpenCVEstimator(dataset.K)
+    else:
+        raise Exception(f'Invalid method: {method}')
         
     images = iter(dataset.gray)
     for _ in range(25):

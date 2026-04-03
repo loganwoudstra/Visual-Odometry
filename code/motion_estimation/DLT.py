@@ -17,56 +17,59 @@ class DLTEstimator(MotionEstimator):
         self.eight_point_estimator = EightPointEstimator(self.K)
         self.returns_global = True
         self.landmarks = deque(maxlen=MAX_LANDMARKS)
-        self.initialized = -1 # -1=processed no frames, 0=processed frame 1, 1=proccseed frames 1 and 2 (ie. initialized)
+        self.frame_count = 0
         self.prev_P = None
         self.P = None
         self.last_pose = np.eye(4)
         self.frame_count = 0
+        self.keyframe_P = None
+        self.keyframe_kp = None
+        self.keyframe_des = None
         
     def initial_estimation(self, img, reprojection_tol=2.0):
-        if self.initialized == -1: # first frame
+        if self.frame_count == 0: # first frame
             pose = self.eight_point_estimator.estimate(img)
-        elif self.initialized == 0: # second frame
-            pose, pts1, pts2, des = self.eight_point_estimator.estimate(img, return_pts_des=True)
+            self.P = self.K @ np.eye(3, 4)
+            
+            self.keyframe_P = self.P
+            self.keyframe_kp = self.eight_point_estimator.kp
+            self.keyframe_des = self.eight_point_estimator.des
+        else:
+            rel_motion, pts1, pts2, des = self.eight_point_estimator.estimate(img, return_pts_des=True)
+            pose = self.last_pose @ rel_motion
+            R_wc = pose[:3, :3] # world tocamera
+            t_wc = pose[:3, 3]
+            R_cw = R_wc.T # camera to world
+            t_cw = -R_wc.T @ t_wc
+            self.P = self.K @ np.hstack((R_cw, t_cw.reshape(3,1)))
 
-            P1 = self.K @ np.eye(3, 4)
-            P2 = self.K @ pose[:3]
-
-            pts_homo = self.triangulate_points(P1, P2, pts1, pts2)
+            pts_homo = self.triangulate_points(self.prev_P, self.P, pts1, pts2)
             
             # only take poitns where depth is positive and reprojection error is sufficently small
-            proj1 = P1 @ pts_homo
-            proj2 = P2 @ pts_homo
+            proj1 = self.prev_P @ pts_homo
+            proj2 = self.P @ pts_homo
             valid = (proj1[2] > 0) & (proj2[2] > 0)
             
-            reproj1 = self.reprojection_error(pts_homo, pts1, P1)
-            reproj2 = self.reprojection_error(pts_homo, pts2, P2)
-            valid &= (reproj1 < reprojection_tol) & (reproj2 < reprojection_tol)
-            
-            depths = pts_homo[2] / pts_homo[3]  # z/w
-            depth_median = np.median(depths[valid])
-            valid &= (depths > depth_median * 0.1) & (depths < depth_median * 3)
+            reproj1 = self.reprojection_error(pts_homo, pts1, self.prev_P)
+            reproj2 = self.reprojection_error(pts_homo, pts2, self.P)
+            # valid &= (reproj1 < reprojection_tol) & (reproj2 < reprojection_tol)
 
             valid_idx = np.where(valid)[0]
             pts_homo = pts_homo[:, valid_idx]
             des = [des[i] for i in valid_idx]
             
+            depths = pts_homo[2] / pts_homo[3]          # z/w
+            median_depth = np.median(depths[(depths > 0.1) & (depths < 10)])
+            pts_homo[:3] /= median_depth   
+            
             print("reproj err on prev frame - median:", np.median(reproj1), "max:", reproj1.max())
             print("reproj err on curr frame - median:", np.median(reproj2), "max:", reproj2.max())
-
-            # normalize
-            # scale = np.median(np.linalg.norm(pts_homo[:3], axis=0))
-            # pts_homo[:3] /= scale
 
             # add landmarks
             for pt_i, des_i in zip(pts_homo.T, des):
                 self.landmarks.append(Landmark(pt_i, des_i))
-
-            self.prev_P = P2
-            self.prev_kp = self.eight_point_estimator.kp
-            self.prev_des = self.eight_point_estimator.des
-                
-        self.initialized += 1
+                           
+        self.matches = self.eight_point_estimator.matches
         return pose
         
     def dlt(self, pts3d, pts2d):
@@ -145,10 +148,13 @@ class DLTEstimator(MotionEstimator):
         if np.linalg.det(R) < 0:
             R = -R
             t = -t
-            
+        
+        R_wc = R.T
+        t_wc = -R.T @ t
+
         pose = np.eye(4)
-        pose[:3, :3] = R
-        pose[:3, 3] = t
+        pose[:3, :3] = R_wc
+        pose[:3, 3] = t_wc
         return pose
     
     def camera_center(self, P):
@@ -157,15 +163,18 @@ class DLTEstimator(MotionEstimator):
         t = M[:, 3]
         return -R.T @ t  # 3D world position of camera
     
-    def add_new_landmarks(self, max_new=100, reprojection_tol=2.0, min_baseline=0.1):
-        # c_prev = self.camera_center(self.prev_P)
-        # c_curr = self.camera_center(self.P)
-        # baseline = np.linalg.norm(c_curr - c_prev)
-        # if baseline < min_baseline:
-        #     return
-        c_prev = self.camera_center(self.prev_P)
+    def should_add_keyframe(self):
+        c_kf = self.camera_center(self.keyframe_P)
         c_curr = self.camera_center(self.P)
-        baseline = np.linalg.norm(c_curr - c_prev)
+        baseline = np.linalg.norm(c_curr - c_kf)
+        depths = np.array([(self.P @ lm.pos)[2] / lm.pos[3] for lm in self.landmarks])
+        median_depth = np.median(depths[depths > 0])
+        return baseline / median_depth > 0.20 
+    
+    def add_new_landmarks(self, max_new=100, reprojection_tol=2.0):
+        c_kf = self.camera_center(self.keyframe_P)
+        c_curr = self.camera_center(self.P)
+        baseline = np.linalg.norm(c_curr - c_kf)
         
         # scale baseline relative to median landmark depth
         depths = np.array([(self.P @ lm.pos)[2] / lm.pos[3] 
@@ -191,24 +200,26 @@ class DLTEstimator(MotionEstimator):
         unmatched_des = [self.des[i] for i in unmatched_ids]
 
         # find matches (of unmatched) between curr and prev frame
-        cross_matches = self.tracker.match(np.array(unmatched_des), np.array(self.prev_des))
+        cross_matches = self.tracker.match(np.array(unmatched_des), np.array(self.keyframe_des))
+        if not cross_matches:
+            return
 
         # traingualte 3d points
         pts2d_euc = np.array([unmatched_kp[m.queryIdx].pt for m in cross_matches]).T
-        prev_pts2d_euc = np.array([self.prev_kp[m.trainIdx].pt for m in cross_matches]).T
+        prev_pts2d_euc = np.array([self.keyframe_kp[m.trainIdx].pt for m in cross_matches]).T
         pts2d_homo = np.vstack((pts2d_euc, np.ones((1, pts2d_euc.shape[1]))))
         prev_pts2d_homo = np.vstack((prev_pts2d_euc, np.ones((1, prev_pts2d_euc.shape[1]))))
         des_new = [unmatched_des[m.queryIdx] for m in cross_matches]
-        pts3d_homo = self.triangulate_points(self.prev_P, self.P, prev_pts2d_homo, pts2d_homo)
+        pts3d_homo = self.triangulate_points(self.keyframe_P, self.P, prev_pts2d_homo, pts2d_homo)
 
         # filter out landamrks behind camera or with bad reprojection
-        valid  = ((self.prev_P @ pts3d_homo)[2] > 0) & ((self.P @ pts3d_homo)[2] > 0)
+        valid  = ((self.keyframe_P @ pts3d_homo)[2] > 0) & ((self.P @ pts3d_homo)[2] > 0)
         reproj_err = self.reprojection_error(pts3d_homo, pts2d_homo, self.P)
-        prev_reproj_err = self.reprojection_error(pts3d_homo, prev_pts2d_homo, self.prev_P)
+        prev_reproj_err = self.reprojection_error(pts3d_homo, prev_pts2d_homo, self.keyframe_P)
         valid &= (reproj_err < reprojection_tol) & (prev_reproj_err < reprojection_tol)
         new_depths = pts3d_homo[2] / pts3d_homo[3]
         depth_median = np.median(new_depths[valid])
-        valid &= (new_depths > depth_median * 0.1) & (new_depths < depth_median * 3)
+        valid &= (new_depths > depth_median * 0.1) & (new_depths < depth_median * 5)
         valid_idx = np.where(valid)[0]
         
         # print("reproj err on prev frame - median:", np.median(prev_reproj_err), "max:", prev_reproj_err.max())
@@ -217,30 +228,19 @@ class DLTEstimator(MotionEstimator):
         # add points with lowest reprojection error
         ranked = sorted(valid_idx, key=lambda i: reproj_err[i])[:max_new]
         
-        # # # rescale new points to match existing map scale
-        # if len(ranked) > 0:
-        #     new_pts_depths = np.array([(self.P @ pts3d_homo[:, i])[2] / pts3d_homo[3, i] 
-        #                                 for i in ranked])
-        #     valid_new_depths = new_pts_depths[new_pts_depths > 0]
-        #     if len(valid_new_depths) > 0:
-        #         new_median = np.median(valid_new_depths)
-        #         scale = median_depth / new_median
-        #         print(f"scale: existing={median_depth:.2f}, new={new_median:.2f}, factor={scale:.4f}")
-
         for i in ranked:
             new_lm = Landmark(pts3d_homo[:, i].copy(), des_new[i].copy())
             self.landmarks.append(new_lm)
                 
-    def match_landmarks(self, img, prune_threshold=50, max_proj_dist=100):
+    def match_landmarks(self, img, prune_threshold=15, max_proj_dist=100):
         # prune landmarks that havent been matched recently
         new_dq = deque(maxlen=MAX_LANDMARKS)
         for lm in self.landmarks:
             if lm.missed_frames < prune_threshold:
                 new_dq.append(lm)
         self.landmarks = new_dq
-        
-        if len(self.landmarks) == 0:
-            return
+        if len(self.landmarks) < 2:
+            return []
         
         self.kp, self.des = self.tracker.detect(img)
         h, w = img.shape[:2]
@@ -248,33 +248,41 @@ class DLTEstimator(MotionEstimator):
         matches = []
 
         # only add matches that are near expected projection
-        raw_matches = self.tracker.match(self.des, np.array([lm.des for lm in self.landmarks]))
-        for m in raw_matches:
-            lm = self.landmarks[m.trainIdx]
-            proj = self.prev_P @ lm.pos
-            if proj[2] <= 0:
-                continue
-            proj /= proj[2]
-            px, py = proj[:2]
-            if not (0 <= px < w and 0 <= py < h):
-                continue
-            kp_pt = np.array(self.kp[m.queryIdx].pt)
-            if np.linalg.norm(kp_pt - np.array([px, py])) > max_proj_dist:
-                continue
-            matches.append(m)
+        matches = self.tracker.match(self.des, np.array([lm.des for lm in self.landmarks]))
+        # for m in raw_matches:
+        #     # lm = self.landmarks[m.trainIdx]
+        #     # proj = self.prev_P @ lm.pos
+        #     # if proj[2] <= 0:
+        #     #     continue
+        #     # proj /= proj[2]
+        #     # px, py = proj[:2]
+        #     # # if not (0 <= px < w and 0 <= py < h):
+        #     # #     continue
+        #     # kp_pt = np.array(self.kp[m.queryIdx].pt)
+        #     # if np.linalg.norm(kp_pt - np.array([px, py])) > max_proj_dist:
+        #     #     continue
+        #     matches.append(m)
 
         matched_ids = set(m.trainIdx for m in matches)
         for i, lm in enumerate(self.landmarks):
             if i not in matched_ids:
                 lm.missed_frames += 1
-
+                
+        # for m in matches:
+        #     self.landmarks[m.trainIdx].des = self.des[m.queryIdx]
+                
         return matches
         
     def estimate(self, img, ransac=True):
+        self.prev_P = self.P
+        self.prev_kp = self.eight_point_estimator.kp
+        self.prev_des = self.eight_point_estimator.des
+        
         # initialization for first 2 frames (estimate E to init 3d map)
-        if self.initialized < 1:
+        if self.frame_count < 2:
             pose = self.initial_estimation(img)
             self.frame_count += 1
+            self.last_pose = pose
             return pose
         
         self.matches = self.match_landmarks(img)
@@ -282,7 +290,11 @@ class DLTEstimator(MotionEstimator):
         
         
         if self.matches is None or len(self.matches) < 6: # not enough matches for DLT
-            print("not enough matches")
+            print("not enough matches — attempting recovery")
+            # reset keyframe to force fresh landmark addition next frame
+            self.keyframe_P = self.prev_P
+            self.keyframe_kp = self.prev_kp
+            self.keyframe_des = self.prev_des
             return self.last_pose
         
         pts3d_homo = np.array([self.landmarks[m.trainIdx].pos for m in self.matches]).T
@@ -293,22 +305,6 @@ class DLTEstimator(MotionEstimator):
         if True:
             pts3d = np.array([self.landmarks[m.trainIdx].pos[:3] / self.landmarks[m.trainIdx].pos[3] for m in self.matches])
             pts2d = np.array([self.kp[m.queryIdx].pt for m in self.matches])
-            
-            depths = pts3d[:, 2]
-            # print("depth min/max/median/std:", depths.min(), depths.max(), np.median(depths), depths.std())
-            
-            # print("pts3d sample:\n", pts3d[:5])
-            # print("pts2d sample:\n", pts2d[:5])
-
-            # good = 0
-            # for m in self.matches:
-            #     X = self.landmarks[m.trainIdx].pos
-            #     proj = self.prev_P @ X
-            #     proj /= proj[2]
-            #     err = np.linalg.norm(proj[:2] - np.array(self.kp[m.queryIdx].pt))
-            #     if err < 10:
-            #         good += 1
-            # print(f"geometrically correct matches: {good}/{len(self.matches)}")
             
             success, rvec, tvec, inliers = cv2.solvePnPRansac(
                 pts3d.astype(np.float32),
@@ -353,23 +349,35 @@ class DLTEstimator(MotionEstimator):
             pose[:3, 3] = t_wc
 
             self.P = self.K @ np.hstack((R, t.reshape(3,1))) 
-        
-            if not np.isfinite(self.P).all():
-                print('not finite')
-                self.prev_P = self.P if self.P is not None else self.prev_P
-                self.prev_kp = self.kp
-                self.prev_des = self.des
-                return self.last_pose
+            
         # if ransac:
         #     self.P = self.dlt_ransac(pts3d_homo, pts2d_homo)
-            
-        # else:
-        #     self.P = self.dlt(pts3d_homo, pts2d_homo)        
+
+        # # else:
+        # #     self.P = self.dlt(pts3d_homo, pts2d_homo)        
         # pose = self.pose_from_P(self.P)
         
-        # if self.frame_count != 3:
+        if len(self.landmarks) > 0:
+            all_depths = np.array([(self.P @ lm.pos)[2] / lm.pos[3] for lm in self.landmarks])
+            all_depths = all_depths[all_depths > 0]
+            translation = np.linalg.norm(pose[:3, 3])
+            print(f"frame={self.frame_count} | map_median_depth={np.median(all_depths):.2f} | cam_pos={pose[:3,3].round(2)} | translation={translation:.2f}")
+        
+        if not np.isfinite(self.P).all():
+            print('not finite')
+            self.prev_P = self.P if self.P is not None else self.prev_P
+            self.prev_kp = self.kp
+            self.prev_des = self.des
+            return self.last_pose
+
         
         self.add_new_landmarks()
+        
+        if self.should_add_keyframe():
+            self.keyframe_P = self.P
+            self.keyframe_kp = self.kp
+            self.keyframe_des = self.des
+            
         self.prev_P = self.P
         self.prev_kp = self.kp
         self.prev_des = self.des
