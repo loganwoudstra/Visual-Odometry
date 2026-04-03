@@ -20,13 +20,9 @@ def main(sequence, method):
     for _ in range(25):
         next(images)
     
-    global_pose = np.eye(4)
-    # trajectory = []
-    
     plt.ion()  # interactive mode
     fig, ax = plt.subplots()
 
-    traj_x, traj_z = [], []
 
     line, = ax.plot([], [], 'g-')  # trajectory line
     point, = ax.plot([], [], 'ro')  # current position
@@ -37,22 +33,18 @@ def main(sequence, method):
     ax.axis("equal")
     
     for i, img in enumerate(images):
-        pose = motion_estimator.estimate(img)
-        if motion_estimator.returns_global:
-            global_pose = pose
-            print(pose[:3, 3])
-            print()
-        else:
-            global_pose = global_pose @ pose
-
-        pos = global_pose[:3, 3]
-
-        traj_x.append(pos[0])
-        traj_z.append(pos[2])
+        motion_estimator.step(img)
+        
+        pos_trajectory = [pose[:3, 3] for pose in motion_estimator.trajectory]
+        traj_x = [pos[0] for pos in pos_trajectory]
+        traj_z = [pos[2] for pos in pos_trajectory]
 
         # Update plot data
         line.set_data(traj_x, traj_z)
-        point.set_data([pos[0]], [pos[2]])
+        curr_pos = (traj_x[-1].item(), traj_z[-1].item())
+        point.set_data([curr_pos[0]], [curr_pos[1]])
+        print(curr_pos)
+        print()
 
         # Auto-rescale view
         ax.relim()
@@ -64,7 +56,7 @@ def main(sequence, method):
         vis = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
         if motion_estimator.matches is not None:
             for m in motion_estimator.matches:
-                pt = motion_estimator.prev_kp[m.queryIdx].pt
+                pt = motion_estimator.kp[m.queryIdx].pt
                 cv2.circle(vis, (int(pt[0]), int(pt[1])), 3, (0, 255, 0), -1)
             
         cv2.imshow('cam0', vis)

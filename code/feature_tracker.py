@@ -44,7 +44,7 @@ class FeatureTracker:
             pts1[:2, i] = x1
             pts2[:2, i] = x2
 
-        return pts1, pts2, des
+        return pts1, pts2
             
 if __name__ == '__main__':
     dataset = Dataset('00')

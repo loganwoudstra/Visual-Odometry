@@ -8,6 +8,7 @@ class MotionEstimator:
         self.K = K
         self.tracker = FeatureTracker()
         self.returns_global = False
+        self.trajectory = []
         self.kp = None
         self.des = None
         self.prev_kp =None
@@ -60,6 +61,15 @@ class MotionEstimator:
         
     def estimate(self, img):
         raise NotImplementedError("Estimate function not implemented for base class")
+    
+    def step(self, img):
+        pose = self.estimate(img)
+        if self.returns_global:
+            global_pose = pose
+        else:
+            last_global_pos = self.trajectory[-1] if self.trajectory else np.eye(4) 
+            global_pose = last_global_pos @ pose
+        self.trajectory.append(global_pose)
     
 class EssentialMatrixEstimator(MotionEstimator):
     def __init__(self, K):
@@ -134,7 +144,7 @@ class OpenCVEstimator(EssentialMatrixEstimator):
         self.matches = self.match_features(img)
         if self.matches is None: # first frame
             return np.eye(4)
-        pts1, pts2, des = self.tracker.point_correspondences(self.prev_kp, self.prev_des, self.kp, self.des, self.matches)
+        pts1, pts2 = self.tracker.point_correspondences(self.prev_kp, self.prev_des, self.kp, self.des, self.matches)
         
         E, mask = cv2.findEssentialMat(pts1[:2].T, pts2[:2].T, self.K, cv2.RANSAC)
         mask = mask.ravel().astype(bool)
