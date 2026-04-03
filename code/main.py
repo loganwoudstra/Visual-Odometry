@@ -1,5 +1,5 @@
 from dataset import Dataset
-from motion_estimation import EightPointEstimator, DLTEstimator, OpenCVEstimator
+from motion_estimation import EightPointEstimator, OpenCVPnpEstimator, OpenCVMatrixEstimator
 import argparse
 import cv2
 import numpy as np
@@ -9,10 +9,10 @@ def main(sequence, method):
     dataset = Dataset(sequence)
     if method == 'eightpoint':
         motion_estimator = EightPointEstimator(dataset.K)
-    elif method == 'dlt':
-        motion_estimator = DLTEstimator(dataset.K)
-    elif method == 'opencv':
-        motion_estimator = OpenCVEstimator(dataset.K)
+    elif method == 'pnp':
+        motion_estimator = OpenCVPnpEstimator(dataset.K)
+    elif method == 'opencv_matrix':
+        motion_estimator = OpenCVMatrixEstimator(dataset.K)
     else:
         raise Exception(f'Invalid method: {method}')
         

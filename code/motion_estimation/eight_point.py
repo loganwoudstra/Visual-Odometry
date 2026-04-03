@@ -89,25 +89,14 @@ class EightPointEstimator(EssentialMatrixEstimator):
         E = U @ np.diag((1, 1, 0)) @ V_t
         return E
         
-    def estimate(self, img, ransac=True, return_pts=False):
-        self.matches = self.match_features(img)
-        if self.matches is None: # first frame
-            return np.eye(4)
-        pts1, pts2 = self.tracker.point_correspondences(self.prev_kp, self.prev_des, self.kp, self.des, self.matches)
-        
-        if ransac:
-            F, inlier_mask = self.eight_point_ransac(pts1, pts2)
-            pts1 = pts1[:, inlier_mask]
-            pts2 = pts2[:, inlier_mask]
-        else:
-            F = self.eight_point(pts1, pts2)
+    def _estimate(self, pts1, pts2):
+        F, inlier_mask = self.eight_point_ransac(pts1, pts2)
+        pts1 = pts1[:, inlier_mask]
+        pts2 = pts2[:, inlier_mask]
+
         E = self.compute_E(F)
         pose = self.pose_from_E(E, pts1, pts2)
-        
-        if return_pts:
-            return pose, pts1, pts2
-        else:
-            return pose
+        return pose
     
     
 if __name__ == '__main__':
