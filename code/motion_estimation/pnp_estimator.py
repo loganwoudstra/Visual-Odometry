@@ -18,19 +18,18 @@ class KeyFrame:
         self.frame_count = frame_count
 
 class PnPEstimator(MotionEstimator):
-    def __init__(self, K, window_size=10):
+    def __init__(self, K, window_size=5):
         super().__init__(K)
         self.eight_point_estimator = EightPointEstimator(self.K)
         self.landmarks = {}
         self.landmark_id = 0
-        self.frame_count = 0
+        self.frame_count = -2
         self.prev_P = None
         self.P = None
-        self.frame_count = 0
         self.keyframe = KeyFrame(None, None, None, None)
         
         # windowed bundle adjustment vars
-        self.BA = BundleAdjuster()
+        self.BA = BundleAdjuster(K)
         self.window_size = window_size
         self.lm_id_window = deque(maxlen=window_size)
         self.pts2d_window = deque(maxlen=window_size)
@@ -47,7 +46,7 @@ class PnPEstimator(MotionEstimator):
         return error
         
     def initial_estimation(self, img, reprojection_tol=2.0):
-        if self.frame_count == 0: # first frame
+        if self.frame_count == -2: # first frame
             pose = self.eight_point_estimator.estimate(img)
             self.P = self.K @ np.eye(3, 4)
             self.kp = self.eight_point_estimator.kp
@@ -72,20 +71,38 @@ class PnPEstimator(MotionEstimator):
             proj1 = self.prev_P @ pts_homo
             proj2 = self.P @ pts_homo
             valid = (proj1[2] > 0) & (proj2[2] > 0)
-            
-            reproj1 = self.reprojection_error(pts_homo, pts1, self.prev_P)
-            reproj2 = self.reprojection_error(pts_homo, pts2, self.P)
-            # valid &= (reproj1 < reprojection_tol) & (reproj2 < reprojection_tol)
 
             valid_idx = np.where(valid)[0]
             pts_homo = pts_homo[:, valid_idx]
             pts1 = pts1[:, valid_idx]
             pts2 = pts2[:, valid_idx]
-            des = [self.des[i] for i in valid_idx]
+            # des = [self.des[i] for i in valid_idx]
+            matched_kp_indices = [m.trainIdx for m in self.matches]  # or queryIdx depending on convention
+            des = [self.des[matched_kp_indices[i]] for i in valid_idx]
             
-            depths = pts_homo[2] / pts_homo[3]          # z/w
-            median_depth = np.median(depths[(depths > 0.1) & (depths < 10)])
-            pts_homo[:3] /= median_depth   
+            depths = pts_homo[2] / pts_homo[3]
+            scale = np.median(depths[depths > 0.1])
+            # scale = np.median(depths[(depths > 0.1)])
+            pts_homo[:3] /= scale
+            self.P[:, 3] /= scale      # translation scales with points
+            
+            reproj1 = self.reprojection_error(pts_homo, pts1, self.prev_P)
+            reproj2 = self.reprojection_error(pts_homo, pts2, self.P)
+
+            # # DEBUG
+            # print("prev_P:\n", self.prev_P)
+            # print("curr_P:\n", self.P)
+            # print("pts1 shape:", pts1.shape, "sample:", pts1[:, :3])
+            # print("pts2 shape:", pts2.shape, "sample:", pts2[:, :3])
+            # print("triangulated pts_homo sample:\n", pts_homo[:, :5])
+
+            # depths1 = (self.prev_P @ pts_homo)[2]
+            # depths2 = (self.P @ pts_homo)[2]
+            # print("depths in prev cam — min:", depths1.min(), "median:", np.median(depths1), "max:", depths1.max())
+            # print("depths in curr cam — min:", depths2.min(), "median:", np.median(depths2), "max:", depths2.max())
+
+            # raw_depths = pts_homo[2] / pts_homo[3]
+            # print("world z/w — min:", raw_depths.min(), "median:", np.median(raw_depths), "max:", raw_depths.max())
             
             print("reproj err on prev frame - median:", np.median(reproj1), "max:", reproj1.max())
             print("reproj err on curr frame - median:", np.median(reproj2), "max:", reproj2.max())
@@ -96,9 +113,9 @@ class PnPEstimator(MotionEstimator):
                 self.landmark_id += 1
                 
             # window
-            added_lm_ids = [i for i in range(self.landmark_id)] # all landmarks are seen in frame 0 and 1
-            self.add_to_window(pts1, added_lm_ids)
-            self.add_to_window(pts2, added_lm_ids)
+            # added_lm_ids = [i for i in range(self.landmark_id)] # all landmarks are seen in frame 0 and 1
+            # self.add_to_window(pts1, added_lm_ids)
+            # self.add_to_window(pts2, added_lm_ids)
                            
         return pose
         
@@ -129,21 +146,21 @@ class PnPEstimator(MotionEstimator):
         return -R.T @ t  # 3D world position of camera
     
     def should_add_keyframe(self):
+        # return True
         c_kf = self.camera_center(self.keyframe.P)
         c_curr = self.camera_center(self.P)
         baseline = np.linalg.norm(c_curr - c_kf)
         depths = np.array([(self.P @ lm.pos)[2] / lm.pos[3] for lm in self.landmarks.values()])
         median_depth = np.median(depths[depths > 0])
-        return baseline / median_depth > 0.20 
+        return baseline / median_depth > 0.35 
     
-    def add_new_landmarks(self, max_new=100, reprojection_tol=10.0):
-        # c_kf = self.camera_center(self.keyframe_P)
+    def add_new_landmarks(self, max_new=200, reprojection_tol=5.0):
+        # c_kf = self.camera_center(self.keyframe.P)
         # c_curr = self.camera_center(self.P)
         # baseline = np.linalg.norm(c_curr - c_kf)
         
         # # scale baseline relative to median landmark depth
-        # depths = np.array([(self.P @ lm.pos)[2] / lm.pos[3] 
-        #                     for lm in self.landmarks])
+        # depths = np.array([(self.P @ lm.pos)[2] / lm.pos[3] for lm in self.landmarks.values()])
         # depths = depths[depths > 0]
         # if len(depths) == 0:
         #     return
@@ -151,7 +168,7 @@ class PnPEstimator(MotionEstimator):
         # median_depth = np.median(depths)
         # relative_baseline = baseline / median_depth
         
-        # if relative_baseline < 0.02:  # less than 2% of scene depth — pure rotation
+        # if relative_baseline < 0.05:  # less than 2% of scene depth — pure rotation
         #     return
 
         # get features not matched with landmarks
@@ -180,12 +197,34 @@ class PnPEstimator(MotionEstimator):
         # filter out landamrks behind camera or with bad reprojection
         valid  = ((self.keyframe.P @ pts3d_homo)[2] > 0) & ((self.P @ pts3d_homo)[2] > 0)
         reproj_err = self.reprojection_error(pts3d_homo, pts2d_homo, self.P)
-        # prev_reproj_err = self.reprojection_error(pts3d_homo, prev_pts2d_homo, self.keyframe_P)
+        # prev_reproj_err = self.reprojection_error(pts3d_homo, prev_pts2d_homo, self.keyframe.P)
         # valid &= (reproj_err < reprojection_tol) & (prev_reproj_err < reprojection_tol)
         # new_depths = pts3d_homo[2] / pts3d_homo[3]
         # depth_median = np.median(new_depths[valid])
-        # valid &= (new_depths > depth_median * 0.1) & (new_depths < depth_median * 5)
+        # valid &= (new_depths > depth_median * 0.1) & (new_depths < depth_median * 1.5)
         valid_idx = np.where(valid)[0]
+        
+        # valid_idx = valid_idx[reproj_err[valid_idx] < reprojection_tol]
+        # if len(valid_idx) == 0:
+        #     return
+
+        # # Scale new points to match existing map
+        # existing_depths = np.array([
+        #     (self.P @ lm.pos)[2] / lm.pos[3]
+        #     for lm in self.landmarks.values()
+        # ])
+        # existing_depths = existing_depths[existing_depths > 0]
+
+        # new_depths = pts3d_homo[2, valid_idx] / pts3d_homo[3, valid_idx]
+        # new_depths = new_depths[new_depths > 0]
+
+        # if len(existing_depths) > 5 and len(new_depths) > 5:
+        #     scale = np.median(existing_depths) / np.median(new_depths)
+        #     # sanity gate — if scale correction is huge, triangulation is degenerate
+        #     if 0.1 < scale < 10.0:
+        #         pts3d_homo[:3, :] *= scale  # only scale XYZ, not W
+        #     else:
+        #         return  # skip adding these landmarks entirely
         
         # print("reproj err on prev frame - median:", np.median(prev_reproj_err), "max:", prev_reproj_err.max())
         # print("reproj err on curr frame - median:", np.median(reproj_err), "max:", reproj_err.max())
@@ -198,7 +237,8 @@ class PnPEstimator(MotionEstimator):
             self.landmark_id += 1
             # TODO: add points to window?
                 
-    def match_landmarks(self, img, prune_threshold=15, max_proj_dist=100):
+    def match_landmarks(self, img, prune_threshold=25):
+        assert prune_threshold >= self.window_size, 'prune_threshold cannot be larger than window size'
         # prune landmarks that havent been matched recently
         keep_ids = set()
         for id, lm in self.landmarks.items():
@@ -230,21 +270,27 @@ class PnPEstimator(MotionEstimator):
         return matches
     
     def bundle_adjust(self):
-        if self.frame_count < self.window_size:
+        if self.frame_count < self.window_size - 1:
             return
          
         unique_lm_ids_window = list(set([id for lm_ids in self.lm_id_window for id in lm_ids])) # go back to list to keep order fixed
         pts3d_window = np.array([self.landmarks[id].pos for id in unique_lm_ids_window]).T
-        correspondences = [[unique_lm_ids_window.index(id) for id in lm_ids] for lm_ids in self.lm_id_window]
+        lm_id_to_idx = {lm_id: i for i, lm_id in enumerate(unique_lm_ids_window)}
+        correspondences = [[lm_id_to_idx[id] for id in lm_ids] for lm_ids in self.lm_id_window]
         camera_window = np.array(self.trajectory[-self.window_size:])
-        pts3d, cams = self.BA.adjust(pts3d_window, self.pts2d_window, correspondences, camera_window)
         
-        # TODO: repalce old treajectory and landamrks
+        pts3d_opt, cams_opt = self.BA.adjust(pts3d_window, self.pts2d_window, correspondences, camera_window)
+        
+        # repalce old treajectory and landamrks
+        for i, lm_id in enumerate(unique_lm_ids_window):
+            self.landmarks[lm_id].pos = pts3d_opt[:, i]
+        self.trajectory[-self.window_size:] = list(cams_opt)
     
     def estimate(self, img):
         # initialization for first 2 frames (estimate E to init 3d map)
-        if self.frame_count < 2:
-            pose = self.initial_estimation(img)
+        if self.frame_count < 0:
+            self.initial_estimation(img)
+            pose = self.pose_from_P(self.P)
             return pose
         
         self.matches = self.match_landmarks(img)
@@ -262,7 +308,7 @@ class PnPEstimator(MotionEstimator):
         
         self.add_to_window(pts2d_homo, [m.trainIdx for m in self.matches])
         
-        self.P = self._estimate(pts3d_homo, pts2d_homo)      
+        self.P = self._estimate(pts3d_homo, pts2d_homo) 
         pose = self.pose_from_P(self.P)
         
         if len(self.landmarks) > 0:
@@ -278,18 +324,19 @@ class PnPEstimator(MotionEstimator):
     
     def step(self, img):
         pose = self.estimate(img)
+        self.trajectory.append(pose)
         
+        if self.frame_count >= 0:
+            # self.bundle_adjust()
+            self.add_new_landmarks()
+            if self.should_add_keyframe():
+                print('Keyframe: ', self.frame_count)
+                self.keyframe = KeyFrame(self.P, self.kp, self.des, self.frame_count)
+                
         self.frame_count += 1
         self.prev_P = self.P
         self.prev_kp = self.kp
         self.prev_des = self.des
-        self.trajectory.append(pose)
-        
-        if self.frame_count > 2:
-            self.bundle_adjust()
-            self.add_new_landmarks()
-            if self.should_add_keyframe():
-                self.keyframe = KeyFrame(self.P, self.kp, self.des, self.frame_count)
         
     
 class OpenCVPnpEstimator(PnPEstimator):
@@ -304,9 +351,9 @@ class OpenCVPnpEstimator(PnPEstimator):
             pts2d_euc.astype(np.float32),
             self.K,
             np.zeros((4, 1)),
-            reprojectionError=8.0,
+            reprojectionError=5.0,
             confidence=0.75,
-            iterationsCount=1000,
+            iterationsCount=2000,
             flags=cv2.SOLVEPNP_EPNP
         )
         # print("matches:", len(self.matches))
@@ -319,7 +366,7 @@ class OpenCVPnpEstimator(PnPEstimator):
         
         if success and inliers is not None and len(inliers) >= 6:
             inlier_idx = inliers.flatten()
-            success2, rvec, tvec = cv2.solvePnP(
+            _, rvec, tvec = cv2.solvePnP(
                 pts3d_euc[inlier_idx].astype(np.float32),
                 pts2d_euc[inlier_idx].astype(np.float32),
                 self.K,

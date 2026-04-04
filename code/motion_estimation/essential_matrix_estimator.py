@@ -16,10 +16,33 @@ class EssentialMatrixEstimator(MotionEstimator):
             return None
         matches = self.tracker.match(self.prev_des, self.des)
         return matches
+    
+    def sampson_error(self, pts1, pts2, F):
+        # sampson error for outlier rejection (distance from epipolar line)
+        Fx1 = F @ pts1
+        Ftx2 = F.T @ pts2
+
+        numerator = np.sum(pts2 * Fx1, axis=0) ** 2
+        denominator = Fx1[0]**2 + Fx1[1]**2 + Ftx2[0]**2 + Ftx2[1]**2
+        denominator = np.maximum(denominator, 1e-8)
+
+        error = numerator / denominator
+        return error
+    
+    def E_from_F(self, F):
+        E = self.K.T @ F @ self.K
+        U, S, V_t = np.linalg.svd(E)
+        
+        # ensure given F is rank 2
+        assert np.isclose(S[-1], 0.0), "F is not rank 2"
+        
+        # enforce constraint that E is rank 2 AND both singular values are the same
+        E = U @ np.diag((1, 1, 0)) @ V_t
+        return E
         
     def pose_from_E(self, E, pts1, pts2):
         U, S, V_t = np.linalg.svd(E)
-        assert (np.abs(S[0] - S[1]) < 1e-6) and (np.abs(S[2]) < 1e-6), f"Singular values not of the form (a, a, 0): {S}"
+        assert (np.abs(S[0] - S[1]) < 1e-3) and (np.abs(S[2]) < 1e-3), f"Singular values not of the form (a, a, 0): {S}"
         
         if np.linalg.det(U @ V_t) < 0: # bc rotation matrices must have det = +1
             V_t = -V_t

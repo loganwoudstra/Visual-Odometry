@@ -1,5 +1,5 @@
 from dataset import Dataset
-from motion_estimation import EightPointEstimator, OpenCVPnpEstimator, OpenCVMatrixEstimator
+from motion_estimation import EightPointEstimator, OpenCVPnpEstimator, OpenCVMatrixEstimator, FivePointEstimator, DLTEstimator
 import argparse
 import cv2
 import numpy as np
@@ -7,17 +7,24 @@ import matplotlib.pyplot as plt
 
 def main(sequence, method):
     dataset = Dataset(sequence)
-    if method == 'eightpoint':
-        motion_estimator = EightPointEstimator(dataset.K)
-    elif method == 'pnp':
-        motion_estimator = OpenCVPnpEstimator(dataset.K)
-    elif method == 'opencv_matrix':
-        motion_estimator = OpenCVMatrixEstimator(dataset.K)
-    else:
-        raise Exception(f'Invalid method: {method}')
+    K = dataset.K
+
+    match method:
+        case 'eightpoint':
+            motion_estimator = EightPointEstimator(K)
+        case 'fivepoint':
+            motion_estimator = FivePointEstimator(K)
+        case 'dlt':
+            motion_estimator = DLTEstimator(K)
+        case 'pnp':
+            motion_estimator = OpenCVPnpEstimator(K)
+        case 'opencv_matrix':
+            motion_estimator = OpenCVMatrixEstimator(K)
+        case _:
+            raise Exception(f'Invalid method: {method}')
         
     images = iter(dataset.gray)
-    for _ in range(25):
+    for _ in range(225):
         next(images)
     
     plt.ion()  # interactive mode

@@ -34,18 +34,6 @@ class EightPointEstimator(EssentialMatrixEstimator):
         F = T2.T @ F @ T1 
         return F
     
-    def sampson_error(self, pts1, pts2, F):
-        # sampson error for outlier rejection (distance from epipolar line)
-        Fx1 = F @ pts1
-        Ftx2 = F.T @ pts2
-
-        numerator = np.sum(pts2 * Fx1, axis=0) ** 2
-        denominator = Fx1[0]**2 + Fx1[1]**2 + Ftx2[0]**2 + Ftx2[1]**2
-        denominator = np.maximum(denominator, 1e-8)
-
-        error = numerator / denominator
-        return error
-    
     def eight_point_ransac(self, pts1, pts2, tol=1.0, max_iterations=1000, min_inliers=0.75):
         N = pts1.shape[1]
         
@@ -77,24 +65,13 @@ class EightPointEstimator(EssentialMatrixEstimator):
         F = self.eight_point(inlier_pts1, inlier_pts2)
         
         return F, best_inliers_mask
-    
-    def compute_E(self, F):
-        E = self.K.T @ F @ self.K
-        U, S, V_t = np.linalg.svd(E)
-        
-        # ensure given F is rank 2
-        assert np.isclose(S[-1], 0.0), "F is not rank 2"
-        
-        # enforce constraint that E is rank 2 AND both singular values are the same
-        E = U @ np.diag((1, 1, 0)) @ V_t
-        return E
         
     def _estimate(self, pts1, pts2):
         F, inlier_mask = self.eight_point_ransac(pts1, pts2)
         pts1 = pts1[:, inlier_mask]
         pts2 = pts2[:, inlier_mask]
 
-        E = self.compute_E(F)
+        E = self.E_from_F(F)
         pose = self.pose_from_E(E, pts1, pts2)
         return pose
     
