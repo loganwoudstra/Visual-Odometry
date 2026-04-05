@@ -67,13 +67,10 @@ class EightPointEstimator(EssentialMatrixEstimator):
         return F, best_inliers_mask
         
     def _estimate(self, pts1, pts2):
-        F, inlier_mask = self.eight_point_ransac(pts1, pts2)
-        pts1 = pts1[:, inlier_mask]
-        pts2 = pts2[:, inlier_mask]
-
+        F, mask = self.eight_point_ransac(pts1, pts2)
         E = self.E_from_F(F)
-        pose = self.pose_from_E(E, pts1, pts2)
-        return pose
+        pose = self.pose_from_E(E, pts1[:, mask], pts2[:, mask])
+        return pose, mask
     
     
 if __name__ == '__main__':

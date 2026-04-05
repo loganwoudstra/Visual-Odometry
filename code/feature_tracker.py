@@ -26,24 +26,27 @@ class FeatureTracker:
         matches = self.bf.match(des1, des2)
         matches = sorted(matches, key=lambda x: x.distance)
         return matches
-    # def match(self, des1, des2):
-    #     matches = self.bf.knnMatch(des1, des2, k=2)
-    #     good = [m for m, n in matches if m.distance < 0.75 * n.distance]
-    #     return sorted(good, key=lambda x: x.distance)
+    # def match(self, des1, des2, ratio=0.75):
+    #     raw = self.bf.knnMatch(des1, des2, k=2)
+    #     good = []
+    #     for pair in raw:
+    #         if len(pair) == 2:
+    #             m, n = pair
+    #             if m.distance < ratio * n.distance:
+    #                 good.append(m)
+    #     return good
 
-    def point_correspondences(self, kp1, des1, kp2, des2, matches):
+    def point_correspondences(self, kp1, kp2, matches):
         # sue ones for pts so that homogenous w value is set to 1
         pts1 = np.ones((3, len(matches)))
         pts2 = np.ones((3, len(matches)))
-        des = np.zeros((len(matches), des2.shape[1]), dtype=des2.dtype)
+        
         for i, match in enumerate(matches):
             x1 = kp1[match.queryIdx].pt
             x2 = kp2[match.trainIdx].pt
-            
-            des[i] = des2[match.trainIdx]
             pts1[:2, i] = x1
             pts2[:2, i] = x2
-
+            
         return pts1, pts2
             
 if __name__ == '__main__':

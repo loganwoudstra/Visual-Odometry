@@ -57,6 +57,34 @@ class MotionEstimator:
         if return_type == 'euc':
             pts_3d = pts_3d[:3]
         return pts_3d
+    
+    def triangulate_points_batch(self, P1s, P2, pts1, pts2, return_type='homo'):
+        x1 = pts1[0] / pts1[2]
+        y1 = pts1[1] / pts1[2]
+        x2 = pts2[0] / pts2[2]
+        y2 = pts2[1] / pts2[2]
+        A = np.stack([
+            x1[:, None] * P1s[:, 2, :] - P1s[:, 0, :],
+            y1[:, None] * P1s[:, 2, :] - P1s[:, 1, :],
+            x2[:, None] * P2[2] - P2[0],
+            y2[:, None] * P2[2] - P2[1],
+        ], axis=1) 
+
+        # batch SVD
+        _, _, Vt = np.linalg.svd(A)  # Vt is (N, 4, 4)
+        pts3d = Vt[:, -1, :].T # (4, N)
+        pts3d = pts3d / pts3d[3] # normalize to have w=1
+
+        if return_type == 'euc':
+            return pts3d[:3]
+        return pts3d
+    
+    def reprojection_error(self, pts3d, pts2d, P):
+        proj = P @ pts3d
+        proj /= proj[2, :] # normalize
+
+        error = np.linalg.norm(proj[:2] - pts2d[:2], axis=0)
+        return error
         
     def estimate(self, img):
         raise NotImplementedError("Estimate function not implemented for base class")

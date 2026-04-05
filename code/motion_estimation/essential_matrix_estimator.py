@@ -69,59 +69,68 @@ class EssentialMatrixEstimator(MotionEstimator):
         R_best = np.eye(3)
         t_best = np.zeros(3)
         max_inliers = -1
+        best_mask = None
         for R, t in candidates:
             P2 = self.K @ np.hstack([R, t.reshape(3,1)])
             pts_euc = self.triangulate_points(P1, P2, pts1, pts2, return_type='euc')
             inlier_count = 0
-            for pt in pts_euc.T:
-                cam1_depth = pt[2]
-                cam2_pt = R @ pt[:3] + t
-                cam2_depth = cam2_pt[2]
-                if cam1_depth > 0 and cam2_depth > 0:
-                    inlier_count += 1
+            
+            cam1_depths = pts_euc[2]
+            cam2_depths = (R @ pts_euc + t.reshape(3, 1))[2]
+            cheirality_mask = (cam1_depths > 0) & (cam2_depths > 0)
+            inlier_count = cheirality_mask.sum()
+                    
             if inlier_count > max_inliers:
                 R_best = R
                 t_best = t
                 max_inliers = inlier_count
+                best_mask = cheirality_mask
         
         # covnert R, t into homogenous matrix
         pose = np.eye(4)
         pose[:3, :3] = R_best.T # R_wc = R_cw.T
         pose[:3, 3] = -R_best.T @ t_best 
         
-        return pose
+        return pose, best_mask
     
     def estimate(self, img, return_pts=False):
         self.matches = self.match_features(img)
         if self.matches is None: # first frame
-            return np.eye(4)
-        pts1, pts2 = self.tracker.point_correspondences(self.prev_kp, self.prev_des, self.kp, self.des, self.matches)
-        pose = self._estimate(pts1, pts2)
+            return np.eye(4), []
+        pts1, pts2 = self.tracker.point_correspondences(self.prev_kp, self.kp, self.matches)
+        pose, mask = self._estimate(pts1, pts2)
+        
+        pts1 = pts1[:, mask]
+        pts2 = pts2[:, mask]
+        self.matches = [m for m, keep in zip(self.matches, mask) if keep]
         
         if return_pts:
-            return pose, pts1, pts2
+            return pose, mask, pts1, pts2
         else:
-            return pose
+            return pose, mask
     
     def _estimate(self, pts1, pts2):
         raise NotImplementedError
     
     def step(self, img):
-        rel_pose = self.estimate(img)
+        rel_pose, mask = self.estimate(img)
         last_global_pose = self.trajectory[-1] if self.trajectory else np.eye(4)
         global_pose = last_global_pose @ rel_pose
         self.trajectory.append(global_pose)
+        return mask
     
 class OpenCVMatrixEstimator(EssentialMatrixEstimator):
     def __init__(self, K):
         super().__init__(K)
         
     def _estimate(self, pts1, pts2):
-        E, mask = cv2.findEssentialMat(pts1[:2].T, pts2[:2].T, self.K, cv2.RANSAC)
-        mask = mask.ravel().astype(bool)
-        pose = self.pose_from_E(E, pts1[:, mask], pts2[:, mask])
+        E, inlier_mask = cv2.findEssentialMat(pts1[:2].T, pts2[:2].T, self.K, cv2.RANSAC)
+        inlier_mask = inlier_mask.ravel().astype(bool)
+        pose, cheirality_mask  = self.pose_from_E(E, pts1[:, inlier_mask], pts2[:, inlier_mask])
         
-        return pose
+        full_mask = np.zeros(pts1.shape[1], dtype=bool)
+        full_mask[inlier_mask] = cheirality_mask
+        return pose, full_mask
     
     
 if __name__ == '__main__':
