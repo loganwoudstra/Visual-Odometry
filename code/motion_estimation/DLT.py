@@ -2,8 +2,8 @@ import numpy as np
 from motion_estimation import PnPEstimator
 
 class DLTEstimator(PnPEstimator):
-    def __init__(self, K, window_size=10):
-        super().__init__(K, window_size)
+    def __init__(self, K, tracker, window_size=10):
+        super().__init__(K, tracker, window_size)
         
     def dlt(self, pts3d, pts2d):
         assert pts3d.shape[-1] == pts2d.shape[-1], "point correspondecnes not of equal length"

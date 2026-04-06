@@ -1,12 +1,15 @@
-from dataset import Dataset
-from feature_tracker import FeatureTracker
+from feature_tracking import DescriptionMatcher, KLTTracker
 import numpy as np
-import cv2
 
 class MotionEstimator:
-    def __init__(self, K):
+    def __init__(self, K, tracker):
         self.K = K
-        self.tracker = FeatureTracker()
+        if tracker == 'orb':
+            self.tracker = DescriptionMatcher()
+        elif tracker == 'klt':
+            self.tracker = KLTTracker()
+        else:
+            raise Exception(f'Invalid tracker: {tracker}')
         self.trajectory = []
         self.kp = None
         self.des = None

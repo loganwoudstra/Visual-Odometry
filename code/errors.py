@@ -1,3 +1,5 @@
+# reference: https://rpg.ifi.uzh.ch/docs/IROS18_Zhang.pdf
+
 import numpy as np
 
 def umeyama(est_traj, gt_traj):

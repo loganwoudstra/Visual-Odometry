@@ -4,8 +4,8 @@ from itertools import product
 import sympy as sp
 
 class FivePointEstimator(EssentialMatrixEstimator):
-    def __init__(self, K):
-        super().__init__(K)
+    def __init__(self, K, tracker):
+        super().__init__(K, tracker)
         
     def solve_cubic_contraints(self, pts1, pts2, nullspace, grid_search_res=10):
         """

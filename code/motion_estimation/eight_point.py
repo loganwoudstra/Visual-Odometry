@@ -1,11 +1,11 @@
 from dataset import Dataset
-from feature_tracker import FeatureTracker
+from feature_tracking import DescriptionMatcher
 import numpy as np
 from motion_estimation import EssentialMatrixEstimator
     
 class EightPointEstimator(EssentialMatrixEstimator):
-    def __init__(self, K):
-        super().__init__(K)
+    def __init__(self, K, tracker):
+        super().__init__(K, tracker)
         
     def eight_point(self, pts1, pts2):
         # normalize
@@ -34,7 +34,7 @@ class EightPointEstimator(EssentialMatrixEstimator):
         F = T2.T @ F @ T1 
         return F
     
-    def eight_point_ransac(self, pts1, pts2, tol=1.0, max_iterations=1000, min_inliers=0.75):
+    def eight_point_ransac(self, pts1, pts2, tol=1.0, max_iterations=1000, min_inliers=0.8):
         N = pts1.shape[1]
         
         # compute F
@@ -67,15 +67,18 @@ class EightPointEstimator(EssentialMatrixEstimator):
         return F, best_inliers_mask
         
     def _estimate(self, pts1, pts2):
-        F, mask = self.eight_point_ransac(pts1, pts2)
+        F, inlier_mask = self.eight_point_ransac(pts1, pts2)
         E = self.E_from_F(F)
-        pose = self.pose_from_E(E, pts1[:, mask], pts2[:, mask])
-        return pose, mask
+        pose, cheirality_mask = self.pose_from_E(E, pts1[:, inlier_mask], pts2[:, inlier_mask])
+        
+        full_mask = np.zeros(pts1.shape[1], dtype=bool)
+        full_mask[inlier_mask] = cheirality_mask
+        return pose, full_mask
     
     
 if __name__ == '__main__':
     dataset = Dataset('00')
-    tracker = FeatureTracker()
+    tracker = DescriptionMatcher()
     
     # K = dataset.
     motion_estimator = EightPointEstimator(dataset.K)

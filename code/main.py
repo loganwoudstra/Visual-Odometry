@@ -35,7 +35,8 @@ def align_trajectories(est_traj, gt_traj, est_poses):
 
 def plot_trajectory(est_xz, gt_xz, point, est_line, gt_line, ax):
     est_line.set_data(est_xz[:, 0], est_xz[:, 1])
-    gt_line.set_data(gt_xz[:, 0],   gt_xz[:, 1])
+    if gt_xz is not None:
+        gt_line.set_data(gt_xz[:, 0],   gt_xz[:, 1])
     point.set_data([est_xz[-1, 0]], [est_xz[-1, 1]])
     ax.relim()
     ax.autoscale_view()
@@ -44,12 +45,15 @@ def plot_trajectory(est_xz, gt_xz, point, est_line, gt_line, ax):
     
 def update_frame(img, motion_estimator, mask):
     vis = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+    
     if motion_estimator.matches is not None:
         for i, m in enumerate(motion_estimator.matches):
+            if i >= len(mask): # matches that were triangualted this frame
+                break
+            
             # matched keypoint in current frame
             pt1 = motion_estimator.kp[m.trainIdx].pt
             pt1 = (int(pt1[0]), int(pt1[1]))
-            
         
             if isinstance(motion_estimator, PnPEstimator): # lm projection
                 if m.queryIdx not in motion_estimator.landmarks:
@@ -71,6 +75,7 @@ def update_frame(img, motion_estimator, mask):
                 # cv2.circle(vis, pt2, 3, (255, 0, 0), -1) 
         
     cv2.imshow('cam0', vis)
+    cv2.waitKey(1)
     
 def plot_errors(aligned_est_poses, gt_poses, est_aligned, gt_traj, ate_rot_line, ate_trans_line, re_line, ax_ate, ax_re, fig_err):
     if len(est_aligned) > 2:
@@ -94,21 +99,35 @@ def plot_errors(aligned_est_poses, gt_poses, est_aligned, gt_traj, ate_rot_line,
         fig_err.canvas.draw()
         fig_err.canvas.flush_events()
     
-def main(sequence, method, slow):
+def main():
+    parser = argparse.ArgumentParser(description='Visual odometry.')
+    parser.add_argument('--sequence', type=str, default='00', help='Sequence from KITTTI dataset')
+    parser.add_argument('--method', type=str, default='eightpoint', help='Pose estimation method')
+    parser.add_argument('--tracker', type=str, default='orb', help='Tracker method')
+    parser.add_argument('--slow', action='store_true', help='Stop between frames')
+    parser.add_argument('--errors', action='store_true', help='Plot errors and comapre to ground truth')
+    args = parser.parse_args()
+    
+    sequence = args.sequence
+    method = args.method
+    tracker = args.tracker
+    slow = args.slow
+    should_plot_errors = args.errors
+    
     dataset = Dataset(sequence)
     K = dataset.K
 
     match method:
         case 'eightpoint':
-            motion_estimator = EightPointEstimator(K)
+            motion_estimator = EightPointEstimator(K, tracker)
         case 'fivepoint':
-            motion_estimator = FivePointEstimator(K)
+            motion_estimator = FivePointEstimator(K, tracker)
         case 'dlt':
-            motion_estimator = DLTEstimator(K)
+            motion_estimator = DLTEstimator(K, tracker)
         case 'pnp':
-            motion_estimator = OpenCVPnpEstimator(K)
+            motion_estimator = OpenCVPnpEstimator(K, tracker)
         case 'opencv_matrix':
-            motion_estimator = OpenCVMatrixEstimator(K)
+            motion_estimator = OpenCVMatrixEstimator(K, tracker)
         case _:
             raise Exception(f'Invalid method: {method}')
         
@@ -117,7 +136,7 @@ def main(sequence, method, slow):
         next(images)
     
     plt.ion()  # interactive mode
-    fig, ax = plt.subplots()
+    fig, ax = plt.subplots(figsize=(4, 3))
     est_line, = ax.plot([], [], 'g-')
     point, = ax.plot([], [], 'ro') # current pos
     gt_line, = ax.plot([], [], 'b-', label='ground truth')
@@ -131,18 +150,19 @@ def main(sequence, method, slow):
     gt_poses = dataset.poses
     
     # error figure
-    fig_err, (ax_ate, ax_re) = plt.subplots(1, 2, figsize=(8, 4))
-    
-    ate_rot_line, = ax_ate.plot([], [], 'r-',  label='ATE rot (deg)')
-    ate_trans_line, = ax_ate.plot([], [], 'b-',  label='ATE trans (m)')
-    ax_ate.set_xlabel("Frame"); ax_ate.set_ylabel("Error")
-    ax_ate.set_title("Absolute Trajectory Error"); ax_ate.legend()
+    if should_plot_errors:
+        fig_err, (ax_ate, ax_re) = plt.subplots(1, 2, figsize=(8, 4))
+        
+        ate_rot_line, = ax_ate.plot([], [], 'r-',  label='ATE rot (deg)')
+        ate_trans_line, = ax_ate.plot([], [], 'b-',  label='ATE trans (m)')
+        ax_ate.set_xlabel("Frame"); ax_ate.set_ylabel("Error")
+        ax_ate.set_title("Absolute Trajectory Error"); ax_ate.legend()
 
-    re_line, = ax_re.plot([], [], 'g-', label='RE pos median (m)')
-    ax_re.set_xlabel("Distance threshold (m)")
-    ax_re.set_ylabel("Relative Error (m)")
-    ax_re.set_title("Relative Error by Distance")
-    ax_re.legend()
+        re_line, = ax_re.plot([], [], 'g-', label='RE pos median (m)')
+        ax_re.set_xlabel("Distance threshold (m)")
+        ax_re.set_ylabel("Relative Error (m)")
+        ax_re.set_title("Relative Error by Distance")
+        ax_re.legend()
     
     # if slow:
     input('...')
@@ -152,16 +172,20 @@ def main(sequence, method, slow):
         mask = motion_estimator.step(img)
         
         est_poses = motion_estimator.trajectory
-        n_frames = len(est_poses)
-        gt_poses_curr = [gt_poses[START_FRAME + j] for j in range(n_frames)]
-        
         est_traj = [p[:3, 3] for p in est_poses]
-        gt_traj = [p[:3, 3] for p in gt_poses_curr]
         
-        aligned_est_poses, est_xz, gt_xz = align_trajectories(est_traj, gt_traj, est_poses)
+        if should_plot_errors:
+            n_frames = len(est_poses)
+            gt_poses_curr = [gt_poses[START_FRAME + j] for j in range(n_frames)]
+            gt_traj = [p[:3, 3] for p in gt_poses_curr]
+            aligned_est_poses, est_xz, gt_xz = align_trajectories(est_traj, gt_traj, est_poses)
+        else:
+            est_xz = np.array([[p[0], p[2]] for p in est_traj])
+            gt_xz = None
 
         plot_trajectory(est_xz, gt_xz, point, est_line, gt_line, ax)
-        plot_errors(aligned_est_poses, gt_poses_curr, est_xz, gt_xz, ate_rot_line, ate_trans_line, re_line, ax_ate, ax_re, fig_err)
+        if should_plot_errors:
+            plot_errors(aligned_est_poses, gt_poses_curr, est_xz, gt_xz, ate_rot_line, ate_trans_line, re_line, ax_ate, ax_re, fig_err)
         update_frame(img, motion_estimator, mask)
         
         if slow:
@@ -170,9 +194,4 @@ def main(sequence, method, slow):
     cv2.destroyAllWindows()
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Visual odometry.')
-    parser.add_argument('--sequence', type=str, default='00', help='Sequence from KITTTI dataset')
-    parser.add_argument('--method', type=str, default='eightpoint', help='Pose estimation method')
-    parser.add_argument('--slow', action='store_true', help='Stop between frames')
-    args = parser.parse_args()
-    main(args.sequence, args.method, args.slow)
+    main()

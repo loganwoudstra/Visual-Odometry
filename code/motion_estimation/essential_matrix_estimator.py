@@ -1,21 +1,23 @@
 import numpy as np
 import cv2
 from motion_estimation import MotionEstimator
-from feature_tracker import FeatureTracker
-from dataset import Dataset
 
 class EssentialMatrixEstimator(MotionEstimator):
-    def __init__(self, K):
-        super().__init__(K)
+    def __init__(self, K, tracker):
+        super().__init__(K, tracker)
         
-    def match_features(self, img):
-        self.prev_kp = self.kp
-        self.prev_des = self.des
-        self.kp, self.des = self.tracker.detect(img)
-        if self.prev_kp is None or self.prev_des is None: # first frame
-            return None
-        matches = self.tracker.match(self.prev_des, self.des)
-        return matches
+    def point_correspondences(self):
+        # sue ones for pts so that homogenous w value is set to 1
+        pts1 = np.ones((3, len(self.matches)))
+        pts2 = np.ones((3, len(self.matches)))
+        
+        for i, match in enumerate(self.matches):
+            x1 = self.prev_kp[match.queryIdx].pt
+            x2 = self.kp[match.trainIdx].pt
+            pts1[:2, i] = x1
+            pts2[:2, i] = x2
+            
+        return pts1, pts2
     
     def sampson_error(self, pts1, pts2, F):
         # sampson error for outlier rejection (distance from epipolar line)
@@ -93,21 +95,15 @@ class EssentialMatrixEstimator(MotionEstimator):
         
         return pose, best_mask
     
-    def estimate(self, img, return_pts=False):
-        self.matches = self.match_features(img)
-        if self.matches is None: # first frame
+    def estimate(self, img):
+        self.prev_kp = self.kp
+        self.kp, self.matches = self.tracker.get_matches(img)
+        if not self.matches: # no matches
             return np.eye(4), []
-        pts1, pts2 = self.tracker.point_correspondences(self.prev_kp, self.kp, self.matches)
-        pose, mask = self._estimate(pts1, pts2)
         
-        pts1 = pts1[:, mask]
-        pts2 = pts2[:, mask]
-        self.matches = [m for m, keep in zip(self.matches, mask) if keep]
-        
-        if return_pts:
-            return pose, mask, pts1, pts2
-        else:
-            return pose, mask
+        pts1_homo, pts2_homo = self.point_correspondences()
+        pose, mask = self._estimate(pts1_homo, pts2_homo)
+        return pose, mask
     
     def _estimate(self, pts1, pts2):
         raise NotImplementedError
@@ -120,35 +116,15 @@ class EssentialMatrixEstimator(MotionEstimator):
         return mask
     
 class OpenCVMatrixEstimator(EssentialMatrixEstimator):
-    def __init__(self, K):
-        super().__init__(K)
+    def __init__(self, K, tracker):
+        super().__init__(K, tracker)
         
     def _estimate(self, pts1, pts2):
         E, inlier_mask = cv2.findEssentialMat(pts1[:2].T, pts2[:2].T, self.K, cv2.RANSAC)
         inlier_mask = inlier_mask.ravel().astype(bool)
-        pose, cheirality_mask  = self.pose_from_E(E, pts1[:, inlier_mask], pts2[:, inlier_mask])
+        pose, cheirality_mask = self.pose_from_E(E, pts1[:, inlier_mask], pts2[:, inlier_mask])
         
         full_mask = np.zeros(pts1.shape[1], dtype=bool)
         full_mask[inlier_mask] = cheirality_mask
         return pose, full_mask
     
-    
-if __name__ == '__main__':
-    dataset = Dataset('00')
-    tracker = FeatureTracker()
-    
-    # K = dataset.
-    motion_estimator = OpenCVMatrixEstimator(dataset.K)
-    
-    images = iter(dataset.gray)
-    img_prev = next(images)
-    kp_des_prev = tracker.detect(img_prev)
-    
-    for i, img in enumerate(images):
-        pose = motion_estimator.estimate(img)
-        # print(dataset.poses[i + 1])
-        # print(pose)
-        # print()
-        
-        # if i % 50 == 0:
-        #     print(i)
