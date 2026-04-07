@@ -7,7 +7,7 @@ import cv2
 import numpy as np
 import matplotlib.pyplot as plt
 
-START_FRAME = 85
+START_FRAME = 75
 
 def align_trajectories(est_traj, gt_traj, est_poses):
     if len(est_traj) > 2:
@@ -190,6 +190,8 @@ def main():
         
         if slow:
             input('...')
+            
+        # next(images)
         
     cv2.destroyAllWindows()
 

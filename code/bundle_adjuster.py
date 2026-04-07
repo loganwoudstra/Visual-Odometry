@@ -1,7 +1,7 @@
 import numpy as np
 import cv2
 from scipy.optimize import least_squares
-from scipy.spatial.transform import Rotation as R
+from scipy.spatial.transform import Rotation
 from scipy.sparse import lil_matrix
 
 class BundleAdjuster:
@@ -22,7 +22,7 @@ class BundleAdjuster:
         tvecs = cam_params[:, 3:]  # (W,3)
 
         # convert all rvecs to rotation matrices at once
-        rots = R.from_rotvec(rvecs)
+        rots = Rotation.from_rotvec(rvecs)
         R_all = rots.as_matrix()
 
         residuals = []
@@ -134,7 +134,7 @@ class BundleAdjuster:
             method='trf',
             loss='huber',
             f_scale=3.0,       
-            jac_sparsity=sparse_J, 
+            jac_sparsity=sparse_J.tocsr(), 
             ftol=1e-5,
             xtol=1e-5,
             gtol=1e-5,

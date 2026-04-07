@@ -61,5 +61,5 @@ class DLTEstimator(PnPEstimator):
         inlier_pts2d = pts2d[:, best_inliers_mask]
         P = self.dlt(inlier_pts3d, inlier_pts2d)
         
-        return P
+        return P, best_inliers_mask
     

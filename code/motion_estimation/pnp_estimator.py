@@ -9,7 +9,7 @@ class Landmark:
     def __init__(self, pos, des):
         self.pos = pos # 4D homo
         self.des = des
-        # self.missed_frames = 0
+        self.missed_frames = 0
         
 class CandidateKeypoint:
     def __init__(self, pt, des, P, frame_count):
@@ -23,6 +23,8 @@ class PnPEstimator(MotionEstimator):
         super().__init__(K, tracker)
         self.essential_matrix_estimator = OpenCVMatrixEstimator(self.K, tracker)
         self.tracker = self.essential_matrix_estimator.tracker
+        if tracker == 'klt':
+            self.tracker.max_corners = 1000
         
         self.frame_count = -2
         self.prev_P = None
@@ -66,13 +68,8 @@ class PnPEstimator(MotionEstimator):
             self.kp = self.essential_matrix_estimator.kp
             self.des = self.essential_matrix_estimator.des
             tracker_matches = self.essential_matrix_estimator.matches
-            
-            R_wc = pose[:3, :3] # world tocamera
-            t_wc = pose[:3, 3]
-            R_cw = R_wc.T # camera to world
-            t_cw = -R_wc.T @ t_wc
-            self.P = self.K @ np.hstack((R_cw, t_cw.reshape(3,1)))
 
+            self.P = self.P_from_pose(pose)
             pts3d_homo = self.triangulate_points(self.prev_P, self.P, pts1, pts2)
             pts3d_euc = pts3d_homo[:3] / pts3d_homo[3]
             
@@ -136,8 +133,19 @@ class PnPEstimator(MotionEstimator):
         pose[:3, :3] = R_wc
         pose[:3, 3] = t_wc
         return pose
+    
+    def P_from_pose(self, pose):
+        R_wc = pose[:3, :3] # world tocamera
+        t_wc = pose[:3, 3]
+        R_cw = R_wc.T # camera to world
+        t_cw = -R_wc.T @ t_wc
+        P = self.K @ np.hstack((R_cw, t_cw.reshape(3,1)))
+        return P
             
-    def match_keypoints(self, img, prune_threshold=10):     
+    def match_keypoints(self, img, prune_threshold=10):  
+        assert prune_threshold >= self.window_size
+        self.landmarks = {lm_idx: lm for lm_idx, lm in self.landmarks.items() if lm.missed_frames < prune_threshold}
+           
         if len(self.landmarks) < 2:
             return []
         
@@ -169,7 +177,11 @@ class PnPEstimator(MotionEstimator):
                 new_kp_ids.add(kp_idx)
                 
         self.candidate_keypoints = {ckp_idx: ckp for ckp_idx, ckp in self.candidate_keypoints.items() if ckp_idx in updated_ckps}
-        self.landmarks = {lm_idx: lm for lm_idx, lm in self.landmarks.items() if lm_idx in updated_lms}
+        for lm_idx, lm in self.landmarks.items():
+            if lm_idx in updated_lms:
+                lm.missed_frames = 0
+            else:
+                lm.missed_frames += 1
         
         return new_kp_ids
     
@@ -189,8 +201,9 @@ class PnPEstimator(MotionEstimator):
         for i, lm_id in enumerate(unique_lm_ids_window):
             self.landmarks[lm_id].pos = pts3d_opt[:, i]
         self.trajectory[-self.window_size:] = list(cams_opt)
+        self.P = self.P_from_pose(cams_opt[-1])
     
-    def triangulate_ready_tracks(self, bearing_threshold=np.deg2rad(2), max_new=500, reproj_tol=5.0):
+    def triangulate_ready_tracks(self, bearing_threshold=np.deg2rad(10), max_new=500, reproj_tol=5.0):
         ckp_ids = [m.queryIdx for m in self.ckp_kp_matches]
         kp_ids = [m.trainIdx for m in self.ckp_kp_matches]
         
@@ -204,8 +217,8 @@ class PnPEstimator(MotionEstimator):
         C1s = -np.einsum('nij,nj->ni', prev_Ps[:, :, :3].transpose(0,2,1), prev_Ps[:, :, 3])  # (N, 3)
         C2 = camera_center(self.P, self.K)
         baselines = np.linalg.norm(C1s - C2[np.newaxis, :], axis=1)
-        ready = np.where((angles > bearing_threshold) & (baselines > 0.5))[0]
-        # ready = np.where(angles > bearing_threshold)[0]
+        # ready = np.where((angles > bearing_threshold) & (baselines > 0.5))[0]
+        ready = np.where(angles > bearing_threshold)[0]
 
         prev_pts2d_homo = prev_pts2d_homo[:, ready]
         pts2d_homo = pts2d_homo[:, ready]
@@ -278,11 +291,12 @@ class PnPEstimator(MotionEstimator):
         self.add_to_window(pts2d_homo, [m.queryIdx for m in self.matches])
         
         self.P, mask = self._estimate(pts3d_homo, pts2d_homo) 
-        pose = self.pose_from_P(self.P)
         
         if self.frame_count >= 0:
             # self.bundle_adjust()
             self.add_new_landmarks(new_kp_ids)
+            
+        pose = self.pose_from_P(self.P)
         
         # if len(self.landmarks) > 0:
         all_depths = np.array([(self.P @ lm.pos)[2] / lm.pos[3] for lm in self.landmarks.values()])

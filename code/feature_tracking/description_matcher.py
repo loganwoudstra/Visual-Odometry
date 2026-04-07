@@ -9,7 +9,7 @@ class DescriptionMatcher(FeatureTracker):
         
         # can be orb, sift, etc.
         self.tracker = cv2.ORB_create()
-        self.bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
+        self.bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True) # corss check ensure bijective matching
         # self.bf = cv2.BFMatcher(cv2.NORM_HAMMING)
         # self.tracker = cv2.SIFT_create()
         

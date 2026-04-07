@@ -4,7 +4,7 @@ import numpy as np
 from feature_tracking import FeatureTracker
 
 class KLTTracker(FeatureTracker):
-    def __init__(self, max_corners=1000, quality_level=0.3, min_distance=15):
+    def __init__(self, max_corners=500, quality_level=0.1, min_distance=12):
         super().__init__()
         self.max_corners = max_corners
         self.quality_level = quality_level
@@ -12,8 +12,8 @@ class KLTTracker(FeatureTracker):
         self.prev_img = None
         self.lk_params = dict(
             winSize=(21, 21),
-            maxLevel=3,
-            criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 30, 0.01)
+            maxLevel=5,
+            criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 50, 0.05)
         )
 
     def detect(self, img, mask=None):
